@@ -859,21 +859,38 @@ function parsePath(){
   let lang=LANG, idx=0;
   if(LANGS.includes(parts[0])){ lang=parts[0]; idx=1; }
   const route=parts[idx]||"";
-  const slug=parts[idx+1]||"";
+  const urlSlug=parts[idx+1]||"";
+  const slug=route==="services"&&urlSlug ? serviceKeyFromUrlSlug(urlSlug,lang) : urlSlug;
   return {lang,route,slug};
+}
+function serviceUrlSlug(slug,lang=LANG){
+  const title=SVC_COPY[lang]?.[slug]?.[0];
+  if(!title) return slug;
+  return title.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase()
+    .replace(/&/g,"and").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+}
+function serviceKeyFromUrlSlug(urlSlug,lang=LANG){
+  return SERVICES.find(s=>serviceUrlSlug(s.slug,lang)===urlSlug)?.slug
+    || SERVICES.find(s=>LANGS.some(l=>serviceUrlSlug(s.slug,l)===urlSlug))?.slug
+    || urlSlug;
 }
 function buildPath(route,slug){
   let p="/"+LANG+"/"+(route||"");
-  if(route==="services"&&slug) p+="/"+slug;
+  if(route==="services"&&slug) p+="/"+serviceUrlSlug(slug,LANG);
   return p.replace(/\/+$/,"/")!==p?p:p;
 }
-function hrefFor(route,slug){ const p="/"+LANG+(route?("/"+route):"/")+(slug?("/"+slug):""); return USE_HASH?("#"+p):p; }
+function hrefFor(route,slug){
+  const urlSlug=route==="services"&&slug ? serviceUrlSlug(slug,LANG) : slug;
+  const p="/"+LANG+(route?("/"+route):"/")+(urlSlug?("/"+urlSlug):"");
+  return USE_HASH?("#"+p):p;
+}
 
 function navigate(path, push=true){
   const parts=path.split("/").filter(Boolean);
   let idx=0; if(LANGS.includes(parts[0])){ setLangQuiet(parts[0]); idx=1; }
-  const route=parts[idx]||""; const slug=parts[idx+1]||"";
-  const full="/"+LANG+"/"+(route?route+(slug?"/"+slug:""):"");
+  const route=parts[idx]||""; const urlSlug=parts[idx+1]||"";
+  const slug=route==="services"&&urlSlug ? serviceKeyFromUrlSlug(urlSlug,LANG) : urlSlug;
+  const full=buildPath(route,slug);
   if(push){ if(USE_HASH){ location.hash=full; } else { history.pushState({}, "", full); } }
   renderRoute(route,slug);
 }
@@ -883,11 +900,12 @@ function setLangQuiet(l){ if(LANGS.includes(l)){ LANG=l; document.documentElemen
 function setActiveNav(route){
   document.querySelectorAll("[data-route]").forEach(a=>{ if(a.hasAttribute("data-link")) a.classList.toggle("active", (a.dataset.route||"")===route); });
   // update link hrefs to current lang
-  document.querySelectorAll("a[data-link]").forEach(a=>{ a.setAttribute("href", hrefFor(a.dataset.route||"", "")); });
+  document.querySelectorAll("a[data-link]").forEach(a=>{ a.setAttribute("href", hrefFor(a.dataset.route||"", a.dataset.serviceSlug||"")); });
 }
 function updateMeta(route,slug){
   const base=CONFIG.domain;
-  let seg = route?("/"+route+(slug?"/"+slug:"")):"/";
+  const pathForLang=lang=>route?("/"+route+(slug?"/"+(route==="services"?serviceUrlSlug(slug,lang):slug):"")):"/";
+  const seg=pathForLang(LANG);
   let title="Daris Cleaning", desc=t("hero.lead");
   if(route===""){ title=(LANG==="fi"?"Daris Cleaning — Puhtaat tilat ilman murheita":LANG==="sv"?"Daris Cleaning — Rena utrymmen utan bekymmer":"Daris Cleaning — Spotless spaces, zero worries"); }
   else if(route==="services" && !slug){ title=t("nav.services")+" — Daris Cleaning"; desc=t("services.lead"); }
@@ -899,8 +917,11 @@ function updateMeta(route,slug){
   const canon=base+"/"+LANG+(seg==="/"?"/":seg);
   document.querySelector('link[rel=canonical]').setAttribute("href",canon);
   document.querySelectorAll('link[rel=alternate]').forEach(l=>{ const hl=l.getAttribute("hreflang");
-    if(hl==="x-default"){ l.setAttribute("href", base+(seg==="/"?"/":seg)); }
-    else if(LANGS.includes(hl)){ l.setAttribute("href", base+"/"+hl+(seg==="/"?"/":seg)); } });
+    if(hl==="x-default"){
+      const defaultSeg=route?("/"+route+(slug?"/"+slug:"")):"/";
+      l.setAttribute("href",base+defaultSeg);
+    }
+    else if(LANGS.includes(hl)){ const alternateSeg=pathForLang(hl); l.setAttribute("href",base+"/"+hl+(alternateSeg==="/"?"/":alternateSeg)); } });
 }
 
 function renderRoute(route,slug){
@@ -957,7 +978,7 @@ function accordionMarkup(){
       '<div class="acc-panel" id="panel-'+s.slug+'" role="region" aria-labelledby="btn-'+s.slug+'">'+
         '<div class="acc-panel-inner">'+
           '<div class="copy"><p class="hyph">'+cp[2]+'</p>'+
-            '<a class="btn btn-ghost" data-link data-route="services" href="'+hrefFor("services",s.slug)+'" onclick="goService(event,\''+s.slug+'\')">'+c.services.cta+' <span class="arr">→</span></a></div>'+
+            '<a class="btn btn-ghost" data-link data-route="services" data-service-slug="'+s.slug+'" href="'+hrefFor("services",s.slug)+'" onclick="goService(event,\''+s.slug+'\')">'+c.services.cta+' <span class="arr">→</span></a></div>'+
           '<div class="acc-img">'+imgOrCartoon(CONFIG.images.service(s.slug),s.sym,cp[0])+'</div>'+
         '</div>'+
       '</div>'+
@@ -1085,7 +1106,7 @@ function viewServiceDetail(slug){
     </div>
     <h2 style="margin-top:clamp(48px,7vw,96px)">${c.svcPage.related}</h2>
     <div class="svc-list-grid">
-      ${others.map(o=>{const oc=SVC_COPY[LANG][o.slug];return `<a class="svc-mini" data-link data-route="services" href="${hrefFor('services',o.slug)}" onclick="goService(event,'${o.slug}')"><span class="acc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${o.icon}</svg></span><b class="hyph">${oc[0]}</b><small class="hyph">${oc[1]}</small></a>`;}).join("")}
+      ${others.map(o=>{const oc=SVC_COPY[LANG][o.slug];return `<a class="svc-mini" data-link data-route="services" data-service-slug="${o.slug}" href="${hrefFor('services',o.slug)}" onclick="goService(event,'${o.slug}')"><span class="acc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${o.icon}</svg></span><b class="hyph">${oc[0]}</b><small class="hyph">${oc[1]}</small></a>`;}).join("")}
     </div>
   </section><div style="height:clamp(40px,6vw,80px)"></div>`;
 }
@@ -1361,7 +1382,7 @@ function boot(){
   document.querySelectorAll(".seg button").forEach(b=>b.classList.toggle("active",b.dataset.lang===initial));
   applyStaticI18n(); buildFooterChrome();
   // normalise URL to include lang prefix
-  const norm="/"+LANG+"/"+(route?route+(slug?"/"+slug:""):"");
+  const norm=buildPath(route,slug);
   if(USE_HASH){ if((location.hash||'')!=='#'+norm) location.hash=norm; }
   else { history.replaceState({},"",norm); }
   // logo load animation
